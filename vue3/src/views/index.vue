@@ -67,7 +67,7 @@ const picArr = [swiperPic1]
 const categoryArr = ref([])
 const programList = ref([])
 const queryParams = ref({
-  "areaId": 0,
+  "areaId": 2,
   "parentProgramCategoryIds": []
 })
 const programListVoList = ref([])
