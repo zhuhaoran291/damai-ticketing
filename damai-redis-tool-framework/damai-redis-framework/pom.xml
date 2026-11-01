@@ -40,12 +40,6 @@
 
         <dependency>
             <groupId>com.example</groupId>
-            <artifactId>damai-common</artifactId>
-            <version>${revision}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.example</groupId>
             <artifactId>damai-redis-common-framework</artifactId>
             <version>${revision}</version>
         </dependency>
