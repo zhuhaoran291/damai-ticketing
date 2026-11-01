@@ -1,0 +1,33 @@
+name: unit-tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # 只跑 program-service 的单元测试，并把它依赖的模块一起构建（-am）。
+      # 这批测试不启动 Spring 上下文，也不需要 MySQL / Redis / Nacos。
+      - name: Run unit tests
+        run: mvn -B -pl damai-server/damai-program-service -am test -Dspotless.check.skip=true
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: damai-server/damai-program-service/target/surefire-reports/
+          if-no-files-found: ignore
