@@ -1,3 +1,13 @@
+> ### 本仓库说明
+>
+> 本项目是开源项目 [**java-up-up/damai**](https://github.com/java-up-up/damai) 的**二次开发**版本，原作者为「阿星不是程序员」。
+>
+> - 原始代码以 **Apache-2.0** 协议发布，本仓库继续沿用该协议，许可证全文见 [LICENSE](./LICENSE)。
+> - 本仓库保留上游全部提交历史，可在 `git log` 中查看原始作者与提交记录。
+> - 本仓库相对于上游的改动，见 `git log --oneline upstream/main..main`，当前包含：修复首页节目列表因默认 `areaId=0` 而永远为空的问题。
+>
+> 如果你要找的是原项目、配套文档与视频，请访问上游仓库。
+
 <p align="center">
   <a href="https://javaup.chat/damai">
     <img src="https://multimedia-javaup.cn/damai/structure/damai-banner.png" alt="DAMAI 大麦高并发票务系统" width="100%" />
