@@ -162,6 +162,8 @@ def main():
     parser.add_argument("--program", type=int, default=8, help="被限购的节目 id")
     parser.add_argument("--category", type=int, default=10, help="票档 id")
     parser.add_argument("--limit", type=int, default=6, help="该节目的每账号限购数")
+    parser.add_argument("--interval", type=float, default=6.0,
+                        help="两次下单的间隔秒数，需大于下单防重窗口（Issue #7）")
     args = parser.parse_args()
 
     try:
