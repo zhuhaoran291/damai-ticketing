@@ -35,7 +35,8 @@ public class ProgramOrderV3Strategy implements ProgramOrderStrategy {
     
     @RepeatExecuteLimit(
             name = RepeatExecuteLimitConstants.CREATE_PROGRAM_ORDER,
-            keys = {"#programOrderCreateDto.userId","#programOrderCreateDto.programId"})
+            keys = {"#programOrderCreateDto.userId","#programOrderCreateDto.programId"},
+            durationTime = RepeatExecuteLimitConstants.CREATE_PROGRAM_ORDER_REPEAT_DURATION_SECONDS)
     @Override
     public String createOrder(ProgramOrderCreateDto programOrderCreateDto) {
         compositeContainer.execute(CompositeCheckType.PROGRAM_ORDER_CREATE_CHECK.getValue(),programOrderCreateDto);
