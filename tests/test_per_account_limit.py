@@ -27,6 +27,7 @@
 
 import argparse
 import sys
+import time
 
 import requests
 
@@ -35,6 +36,7 @@ EXIT_FAIL = 1
 EXIT_SKIP = 2
 
 CODE_LIMIT_OVER = "50009"  # BaseCode.PER_ACCOUNT_PURCHASE_COUNT_OVER_LIMIT
+DEDUP_MESSAGE = "提交频繁，请稍后重试"  # Issue #7 的防重窗口拦截
 
 
 class Client:
@@ -112,7 +114,16 @@ def run(args):
     try:
         # 多给两次机会，容忍「计数缓存短暂落后于数据库」的情况
         for i in range(args.limit - before + 2):
+            # 同一账号 + 同一节目有下单防重窗口（Issue #7），两次下单必须隔开，
+            # 否则第 2 单会被「提交频繁」挡掉，看起来像限购提前生效。
+            if i:
+                time.sleep(args.interval)
             resp = create_order(client, args.program, args.category, ticket_user_id, user_id)
+            if str(resp.get("code")) != "0" and resp.get("message") == DEDUP_MESSAGE:
+                # 上一次运行残留的防重标记还没过期，等过期后再来，本次不算一次下单机会
+                print("  第 %d 次下单：还在防重窗口内，等待 %.1f 秒后重试" % (i + 1, args.interval))
+                time.sleep(args.interval)
+                resp = create_order(client, args.program, args.category, ticket_user_id, user_id)
             code = str(resp.get("code"))
             if code == "0":
                 created.append(resp.get("data"))
@@ -151,6 +162,8 @@ def main():
     parser.add_argument("--program", type=int, default=8, help="被限购的节目 id")
     parser.add_argument("--category", type=int, default=10, help="票档 id")
     parser.add_argument("--limit", type=int, default=6, help="该节目的每账号限购数")
+    parser.add_argument("--interval", type=float, default=6.0,
+                        help="两次下单的间隔秒数，需大于下单防重窗口（Issue #7）")
     args = parser.parse_args()
 
     try:

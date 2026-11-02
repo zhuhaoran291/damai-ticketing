@@ -31,7 +31,8 @@ public class ProgramOrderV1Strategy implements ProgramOrderStrategy {
     
     @RepeatExecuteLimit(
             name = RepeatExecuteLimitConstants.CREATE_PROGRAM_ORDER,
-            keys = {"#programOrderCreateDto.userId","#programOrderCreateDto.programId"})
+            keys = {"#programOrderCreateDto.userId","#programOrderCreateDto.programId"},
+            durationTime = RepeatExecuteLimitConstants.CREATE_PROGRAM_ORDER_REPEAT_DURATION_SECONDS)
     @ServiceLock(name = PROGRAM_ORDER_CREATE_V1,keys = {"#programOrderCreateDto.programId"})
     @Override
     public String createOrder(final ProgramOrderCreateDto programOrderCreateDto) {
