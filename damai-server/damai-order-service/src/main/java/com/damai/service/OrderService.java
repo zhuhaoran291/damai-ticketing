@@ -594,8 +594,9 @@ public class OrderService extends ServiceImpl<OrderMapper, Order> {
     @RepeatExecuteLimit(name = CREATE_PROGRAM_ORDER_MQ,keys = {"#orderCreateDto.orderNumber"})
     @Transactional(rollbackFor = Exception.class)
     public String createMq(OrderCreateDto orderCreateDto){
-        String orderNumber = create(orderCreateDto);
-        redisCache.set(RedisKeyBuild.createRedisKey(RedisKeyManage.ORDER_MQ,orderNumber),orderNumber,1, TimeUnit.MINUTES);
+        Order existing = orderMapper.selectOne(Wrappers.lambdaQuery(Order.class)
+                .eq(Order::getOrderNumber, orderCreateDto.getOrderNumber()));
+        String orderNumber = existing == null ? create(orderCreateDto) : String.valueOf(existing.getOrderNumber());
         return orderNumber;
     }
     
@@ -605,7 +606,19 @@ public class OrderService extends ServiceImpl<OrderMapper, Order> {
     }
     
     public String getCache(OrderGetDto orderGetDto) {
-        return redisCache.get(RedisKeyBuild.createRedisKey(RedisKeyManage.ORDER_MQ,orderGetDto.getOrderNumber()),String.class);
+        String cached = redisCache.get(RedisKeyBuild.createRedisKey(RedisKeyManage.ORDER_MQ,orderGetDto.getOrderNumber()),String.class);
+        if (cached != null) {
+            return cached;
+        }
+        Boolean pending = redisCache.getInstance().opsForHash().hasKey(
+                RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_PENDING),
+                String.valueOf(orderGetDto.getOrderNumber()));
+        if (Boolean.TRUE.equals(pending)) {
+            return null;
+        }
+        Order existing = orderMapper.selectOne(Wrappers.lambdaQuery(Order.class)
+                .eq(Order::getOrderNumber, orderGetDto.getOrderNumber()));
+        return existing == null ? null : String.valueOf(existing.getOrderNumber());
     }
     
     @RepeatExecuteLimit(name = CANCEL_PROGRAM_ORDER,keys = {"#orderCancelDto.orderNumber"})

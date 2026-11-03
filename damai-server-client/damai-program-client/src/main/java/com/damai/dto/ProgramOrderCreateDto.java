@@ -3,6 +3,7 @@ package com.damai.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.media.Schema.RequiredMode;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -36,4 +37,8 @@ public class ProgramOrderCreateDto {
     
     @Schema(name ="ticketCount", type ="Integer", description = "购买票数量(如果不选座位，那么购买票数量必填)")
     private Integer ticketCount;
+
+    @Size(max = 64)
+    @Schema(name = "requestId", description = "同一次 V4 下单重试使用相同的请求标识")
+    private String requestId;
 }

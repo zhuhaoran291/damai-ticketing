@@ -6,6 +6,31 @@ local ticket_count_list = cjson.decode(ARGV[1])
 local purchase_seat_list = {}
 local total_seat_dto_price = 0
 local total_seat_vo_price = 0
+if KEYS[5] and KEYS[6] then
+    for i = 5, 6 do
+        local pending_type = redis.call('type', KEYS[i]).ok
+        if pending_type ~= 'none' and pending_type ~= 'hash' then
+            return redis.error_reply('pending order key must be a hash')
+        end
+    end
+    if KEYS[7] then
+        local request_type = redis.call('type', KEYS[7]).ok
+        if request_type ~= 'none' and request_type ~= 'string' then
+            return redis.error_reply('order request key must be a string')
+        end
+        local previous = redis.call('get', KEYS[7])
+        if previous then
+            return '{"code":0,"pendingOrderNumber":"' .. previous .. '"}'
+        end
+    end
+    local existing = redis.call('hget', KEYS[6], ARGV[5])
+    if existing then
+        if KEYS[7] then
+            redis.call('set', KEYS[7], existing, 'EX', 86400)
+        end
+        return '{"code":0,"pendingOrderNumber":"' .. existing .. '"}'
+    end
+end
 local function find_adjacent_seats(all_seats, seat_count)
     local adjacent_seats = {}
     
@@ -133,5 +158,15 @@ for ticket_category_id, seat_id_array in pairs(seat_id_list) do
 end
 for ticket_category_id, seat_data_array in pairs(seat_data_list) do
     redis.call('hmset',string.format(placeholder_seat_lock_hash_key,program_id,tostring(ticket_category_id)),unpack(seat_data_array))    
+end
+-- V4 records the request in the same script as the seat reservation so that a
+-- restarted producer can retry it without reserving the seats a second time.
+if KEYS[5] and KEYS[6] and ARGV[3] and ARGV[4] and ARGV[5] then
+    local pending = '{"request":' .. ARGV[3] .. ',"seats":' .. cjson.encode(purchase_seat_list) .. '}'
+    redis.call('hset', KEYS[5], ARGV[4], pending)
+    redis.call('hset', KEYS[6], ARGV[5], ARGV[4])
+    if KEYS[7] then
+        redis.call('set', KEYS[7], ARGV[4], 'EX', 86400)
+    end
 end
 return string.format('{"%s": %d, "%s": %s}', 'code', 0, 'purchaseSeatList', cjson.encode(purchase_seat_list))
