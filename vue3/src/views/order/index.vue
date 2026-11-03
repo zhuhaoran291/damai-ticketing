@@ -181,7 +181,6 @@ const svg = `
           L 15 15
         " style="stroke-width: 4px; fill: rgba(0, 0, 0, 0)"/>`
 const pollingTimer = ref(null);
-const timeoutTimer = ref(null);
 // 10s的时间（毫秒）
 const tenSecond = 10000;
 
@@ -256,23 +255,17 @@ function getOrCreateV4RequestId() {
 }
 
 //订单查询轮训
-const startPolling = (orderNumber,startTime, pending = false) => {
+const startPolling = (orderNumber,startTime) => {
   orderNumberCache.value = '';
   pollingTimer.value = setInterval(() => {
     const currentTime = Date.now();
     if (currentTime - startTime >= tenSecond) {
       stopPolling();
-      //1. 大于10秒，此订单被舍弃，显示排队弹框
-      //2. loading弹出框关闭
+      // 查询超时不代表订单失败，后台可能仍在创建订单。
       loadingClose();
-      //3. 排队弹框显示
-      if (pending) {
-        ElMessageBox.alert('订单号：' + orderNumber + '。订单仍在确认中，请勿重复提交，可稍后在订单列表查看。', '订单确认中', {
-          confirmButtonText: '知道了'
-        });
-      } else {
-        dialogShow();
-      }
+      ElMessageBox.alert('订单号：' + orderNumber + '。订单仍在确认中，请勿重复提交，可稍后在订单列表查看。', '订单确认中', {
+        confirmButtonText: '知道了'
+      });
       return;
     }
     getOrderCache(orderNumber);
@@ -290,8 +283,6 @@ const startPolling = (orderNumber,startTime, pending = false) => {
 const stopPolling = () => {
   clearInterval(pollingTimer.value);
   pollingTimer.value = null;
-  clearTimeout(timeoutTimer.value);
-  timeoutTimer.value = null;
 };
 
 /**
@@ -406,13 +397,13 @@ function submitOrder(){
     
     orderCreateV4Api(orderCreateParams).then(response => {
       if (response.code == '0' && response.data != null) {
-        console.log('异步订单创建成功 订单编号',response.data)
+        console.log('异步订单已受理，等待创建结果 订单编号',response.data)
         //开始定时轮训查询
-        startPolling(response.data,Date.now(), true);
+        startPolling(response.data,Date.now());
       }else if (String(response.code) === '515') {
         if (response.data) {
           ElMessage.warning(response.message);
-          startPolling(response.data, Date.now(), true);
+          startPolling(response.data, Date.now());
         } else {
           loadingClose();
           ElMessageBox.alert(response.message + '。请先到订单列表查看结果。', '订单确认中', {
