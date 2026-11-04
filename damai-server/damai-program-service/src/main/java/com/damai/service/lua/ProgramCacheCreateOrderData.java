@@ -16,4 +16,6 @@ public class ProgramCacheCreateOrderData {
     private Integer code;
     
     private List<SeatVo> purchaseSeatList;
+
+    private String pendingOrderNumber;
 }

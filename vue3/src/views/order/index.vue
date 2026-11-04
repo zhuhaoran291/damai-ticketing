@@ -115,7 +115,7 @@
 <!--                     element-loading-svg-view-box="-10, -10, 50, 50"-->
 <!--                     element-loading-background="rgba(122, 122, 122, 0.8)"-->
 <!--                     @click="dialogLoading">点击loading</el-button>-->
-          <el-button type="primary" class="submit" @click="submitOrder">提交订单</el-button>
+          <el-button type="primary" class="submit" :disabled="orderSubmitting || pollingTimer !== null" @click="submitOrder">提交订单</el-button>
         </div>
         </div>
       </div>
@@ -147,7 +147,7 @@ import { getUserIdKey} from "@/utils/auth";
 import { getPersonInfoId} from '@/api/personInfo'
 import {getTicketUser} from "@/api/buyTicketUser";
 import {getOrderCacheApi, orderCreateV1Api, orderCreateV2Api, orderCreateV3Api, orderCreateV4Api} from '@/api/order.js'
-import {ElMessage} from "element-plus";
+import {ElMessage, ElMessageBox} from "element-plus";
 //获取用户信息
 import useUserStore from "../../store/modules/user";
 
@@ -166,6 +166,7 @@ const ticketUserIdArr = ref([])
 const ticketCategoryId = ref('')
 const orderNumberCache = ref('')
 const loading = ref(false)
+const orderSubmitting = ref(false)
 // 选座相关数据
 const seatIdList = ref([])
 const isChooseSeat = ref(false)
@@ -180,7 +181,6 @@ const svg = `
           L 15 15
         " style="stroke-width: 4px; fill: rgba(0, 0, 0, 0)"/>`
 const pollingTimer = ref(null);
-const timeoutTimer = ref(null);
 // 10s的时间（毫秒）
 const tenSecond = 10000;
 
@@ -240,17 +240,32 @@ function getOrderCache(orderNumber){
   })
 }
 
+function v4RequestStorageKey() {
+  return `damai:v4-order-request:${useUser.userId}:${detailList.value.id}`;
+}
+
+function getOrCreateV4RequestId() {
+  const key = v4RequestStorageKey();
+  let requestId = localStorage.getItem(key);
+  if (!requestId) {
+    requestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(key, requestId);
+  }
+  return requestId;
+}
+
 //订单查询轮训
 const startPolling = (orderNumber,startTime) => {
+  orderNumberCache.value = '';
   pollingTimer.value = setInterval(() => {
     const currentTime = Date.now();
     if (currentTime - startTime >= tenSecond) {
       stopPolling();
-      //1. 大于10秒，此订单被舍弃，显示排队弹框
-      //2. loading弹出框关闭
+      // 查询超时不代表订单失败，后台可能仍在创建订单。
       loadingClose();
-      //3. 排队弹框显示
-      dialogShow();
+      ElMessageBox.alert('订单号：' + orderNumber + '。订单仍在确认中，请勿重复提交，可稍后在订单列表查看。', '订单确认中', {
+        confirmButtonText: '知道了'
+      });
       return;
     }
     getOrderCache(orderNumber);
@@ -259,6 +274,7 @@ const startPolling = (orderNumber,startTime) => {
       //执行到这里说明订单创建成功
       //loading弹框关闭
       loadingClose();
+      localStorage.removeItem(v4RequestStorageKey());
       router.replace({path:'/order/payMethod',state:{'orderNumber':orderNumberCache.value}})
     }
   }, 200); // 每200毫秒调用一次
@@ -267,8 +283,6 @@ const startPolling = (orderNumber,startTime) => {
 const stopPolling = () => {
   clearInterval(pollingTimer.value);
   pollingTimer.value = null;
-  clearTimeout(timeoutTimer.value);
-  timeoutTimer.value = null;
 };
 
 /**
@@ -372,24 +386,40 @@ function submitOrder(){
     })
   }else if (createOrderVersion == 4) {
     //v4版本的创建订单
+    if (orderSubmitting.value || pollingTimer.value !== null) {
+      return;
+    }
+    orderSubmitting.value = true;
+    orderCreateParams.requestId = getOrCreateV4RequestId();
 
     //loading弹出框显示
     loadingShow();
     
     orderCreateV4Api(orderCreateParams).then(response => {
       if (response.code == '0' && response.data != null) {
-        console.log('异步订单创建成功 订单编号',response.data)
+        console.log('异步订单已受理，等待创建结果 订单编号',response.data)
         //开始定时轮训查询
         startPolling(response.data,Date.now());
-        // 设置一个10s后停止轮询的定时器
-        timeoutTimer.value = setTimeout(() => {
-          if (pollingTimer.value) {
-            stopPolling();
-          }
-        }, tenSecond);
+      }else if (String(response.code) === '515') {
+        if (response.data) {
+          ElMessage.warning(response.message);
+          startPolling(response.data, Date.now());
+        } else {
+          loadingClose();
+          ElMessageBox.alert(response.message + '。请先到订单列表查看结果。', '订单确认中', {
+            confirmButtonText: '知道了'
+          });
+        }
       }else{
         dialogShow();
       }
+    }).catch(() => {
+      loadingClose();
+      ElMessageBox.alert('下单结果暂未确认，请勿重复提交。再次提交会查询原订单。', '订单确认中', {
+        confirmButtonText: '知道了'
+      });
+    }).finally(() => {
+      orderSubmitting.value = false;
     })
   }
 }

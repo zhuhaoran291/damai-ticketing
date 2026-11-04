@@ -3,6 +3,8 @@ package com.damai.controller;
 import com.damai.common.ApiResponse;
 import com.damai.dto.ProgramOrderCreateDto;
 import com.damai.enums.ProgramOrderVersion;
+import com.damai.exception.OrderPendingException;
+import com.damai.service.ProgramOrderService;
 import com.damai.service.strategy.ProgramOrderContext;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,6 +27,9 @@ public class ProgramOrderController {
     
     @Autowired
     private ProgramOrderContext programOrderContext;
+
+    @Autowired
+    private ProgramOrderService programOrderService;
     
     @Operation(summary  = "购票V1")
     @PostMapping(value = "/create/v1")
@@ -50,7 +55,19 @@ public class ProgramOrderController {
     @Operation(summary  = "购票V4")
     @PostMapping(value = "/create/v4")
     public ApiResponse<String> createV4(@Valid @RequestBody ProgramOrderCreateDto programOrderCreateDto) {
-        return ApiResponse.ok(programOrderContext.get(ProgramOrderVersion.V4_VERSION.getVersion())
-                .createOrder(programOrderCreateDto));
+        try {
+            if (programOrderCreateDto.getRequestId() != null && !programOrderCreateDto.getRequestId().isBlank()) {
+                String existing = programOrderService.getExistingRequestOrder(programOrderCreateDto);
+                if (existing != null) {
+                    throw new OrderPendingException(Long.valueOf(existing));
+                }
+            }
+            return ApiResponse.ok(programOrderContext.get(ProgramOrderVersion.V4_VERSION.getVersion())
+                    .createOrder(programOrderCreateDto));
+        } catch (OrderPendingException e) {
+            ApiResponse<String> response = ApiResponse.error(e.getCode(), e.getMessage());
+            response.setData(e.getOrderNumber());
+            return response;
+        }
     }
 }

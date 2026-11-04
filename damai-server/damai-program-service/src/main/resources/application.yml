@@ -50,6 +50,8 @@ spring:
     bootstrap-servers: 127.0.0.1:9092
     producer:
       retries: 1
+      properties:
+        max.block.ms: 2000
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
     topic: create_order

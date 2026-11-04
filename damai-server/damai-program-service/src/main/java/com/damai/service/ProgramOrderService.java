@@ -18,7 +18,9 @@ import com.damai.enums.BaseCode;
 import com.damai.enums.OrderStatus;
 import com.damai.enums.SellStatus;
 import com.damai.exception.DaMaiFrameException;
+import com.damai.exception.OrderPendingException;
 import com.damai.redis.RedisKeyBuild;
+import com.damai.redis.RedisCache;
 import com.damai.service.delaysend.DelayOrderCancelSend;
 import com.damai.service.kafka.CreateOrderMqDomain;
 import com.damai.service.kafka.CreateOrderSend;
@@ -32,7 +34,11 @@ import com.damai.vo.SeatVo;
 import com.damai.vo.TicketCategoryVo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -75,6 +81,9 @@ public class ProgramOrderService {
     
     @Autowired
     private CreateOrderSend createOrderSend;
+
+    @Autowired
+    private RedisCache redisCache;
     
     @Autowired
     private ProgramService programService;
@@ -192,11 +201,33 @@ public class ProgramOrderService {
      * ✨如何获取大麦pro项目？请看 <a href="https://articles.zsxq.com/id_m4d7ni4zwkbq.html">...</a>
      **/
     public String createNewAsync(ProgramOrderCreateDto programOrderCreateDto) {
-        List<SeatVo> purchaseSeatList = createOrderOperateProgramCacheResolution(programOrderCreateDto);
-        return doCreateV2(programOrderCreateDto,purchaseSeatList);
+        if (CollectionUtil.isEmpty(programOrderCreateDto.getSeatDtoList())
+                && programOrderCreateDto.getTicketCount() != null
+                && programOrderCreateDto.getTicketUserIdList() != null
+                && programOrderCreateDto.getTicketCount() != programOrderCreateDto.getTicketUserIdList().size()) {
+            throw new DaMaiFrameException(BaseCode.TICKET_USER_COUNT_UNEQUAL_SEAT_COUNT);
+        }
+        Long orderNumber = uidGenerator.getOrderNumber(programOrderCreateDto.getUserId(), ORDER_TABLE_COUNT);
+        ProgramCacheCreateOrderData reservation = createOrderOperateProgramCacheResolutionData(programOrderCreateDto, orderNumber);
+        if (reservation.getPendingOrderNumber() != null) {
+            throw new OrderPendingException(Long.valueOf(reservation.getPendingOrderNumber()));
+        }
+        return doCreateV2(programOrderCreateDto,reservation.getPurchaseSeatList(),orderNumber);
+    }
+
+    public String getExistingRequestOrder(ProgramOrderCreateDto request) {
+        if (!StringUtils.hasText(request.getRequestId())) {
+            return null;
+        }
+        return redisCache.get(RedisKeyBuild.createRedisKey(RedisKeyManage.PROGRAM_ORDER_REQUEST,
+                request.getUserId(), request.getProgramId(), request.getRequestId()), String.class);
     }
     
     public List<SeatVo> createOrderOperateProgramCacheResolution(ProgramOrderCreateDto programOrderCreateDto){
+        return createOrderOperateProgramCacheResolutionData(programOrderCreateDto, null).getPurchaseSeatList();
+    }
+
+    private ProgramCacheCreateOrderData createOrderOperateProgramCacheResolutionData(ProgramOrderCreateDto programOrderCreateDto, Long orderNumber){
         ProgramShowTime programShowTime =
                 programShowTimeService.selectProgramShowTimeByProgramIdMultipleCache(programOrderCreateDto.getProgramId());
         List<TicketCategoryVo> getTicketCategoryList =
@@ -210,7 +241,7 @@ public class ProgramOrderService {
         Long programId = programOrderCreateDto.getProgramId();
         List<SeatDto> seatDtoList = programOrderCreateDto.getSeatDtoList();
         List<String> keys = new ArrayList<>();
-        String[] data = new String[2];
+        String[] data = new String[orderNumber == null ? 2 : 5];
         JSONArray jsonArray = new JSONArray();
         JSONArray addSeatDatajsonArray = new JSONArray();
         if (CollectionUtil.isNotEmpty(seatDtoList)) {
@@ -251,12 +282,24 @@ public class ProgramOrderService {
         keys.add(String.valueOf(programOrderCreateDto.getProgramId()));
         data[0] = JSON.toJSONString(jsonArray);
         data[1] = JSON.toJSONString(addSeatDatajsonArray);
+        if (orderNumber != null) {
+            keys.add(RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_PENDING));
+            keys.add(RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_PENDING_BY_USER));
+            if (StringUtils.hasText(programOrderCreateDto.getRequestId())) {
+                keys.add(RedisKeyBuild.createRedisKey(RedisKeyManage.PROGRAM_ORDER_REQUEST,
+                        programOrderCreateDto.getUserId(), programOrderCreateDto.getProgramId(),
+                        programOrderCreateDto.getRequestId()).getRelKey());
+            }
+            data[2] = JSON.toJSONString(programOrderCreateDto);
+            data[3] = String.valueOf(orderNumber);
+            data[4] = programOrderCreateDto.getUserId() + ":" + programOrderCreateDto.getProgramId();
+        }
         ProgramCacheCreateOrderData programCacheCreateOrderData = 
                 programCacheCreateOrderResolutionOperate.programCacheOperate(keys, data);
         if (!Objects.equals(programCacheCreateOrderData.getCode(), BaseCode.SUCCESS.getCode())) {
             throw new DaMaiFrameException(Objects.requireNonNull(BaseCode.getRc(programCacheCreateOrderData.getCode())));
         }
-        return programCacheCreateOrderData.getPurchaseSeatList();
+        return programCacheCreateOrderData;
     }
     
     private String doCreate(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList){
@@ -271,22 +314,54 @@ public class ProgramOrderService {
         return orderNumber;
     }
     
-    private String doCreateV2(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList){
-        OrderCreateDto orderCreateDto = buildCreateOrderParam(programOrderCreateDto, purchaseSeatList);
-        
-        String orderNumber = createOrderByMq(orderCreateDto,purchaseSeatList);
-        
-        DelayOrderCancelDto delayOrderCancelDto = new DelayOrderCancelDto();
-        delayOrderCancelDto.setOrderNumber(orderCreateDto.getOrderNumber());
-        delayOrderCancelSend.sendMessage(JSON.toJSONString(delayOrderCancelDto));
-        
-        return orderNumber;
+    private String doCreateV2(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList, Long orderNumber){
+        try {
+            OrderCreateDto orderCreateDto = buildCreateOrderParam(programOrderCreateDto, purchaseSeatList, orderNumber);
+            return createOrderByMq(orderCreateDto);
+        } catch (OrderPendingException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("订单已占座，等待重试 orderNumber: {}", orderNumber, e);
+            throw new OrderPendingException(orderNumber);
+        }
+    }
+
+    /** Retry reservations left behind by a failed or restarted producer. */
+    @Scheduled(fixedDelayString = "${program.order.pending-retry-ms:5000}", scheduler = "pendingOrderRecoveryScheduler")
+    @SuppressWarnings("unchecked")
+    public void retryPendingOrders() {
+        try (Cursor<Entry<Object, Object>> pendingOrders = redisCache.getInstance().opsForHash().scan(
+                RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_PENDING),
+                ScanOptions.scanOptions().count(100).build())) {
+          while (pendingOrders.hasNext()) {
+            Entry<Object, Object> entry = pendingOrders.next();
+            try {
+                Long orderNumber = Long.valueOf(String.valueOf(entry.getKey()));
+                JSONObject pending = JSON.parseObject(String.valueOf(entry.getValue()));
+                ProgramOrderCreateDto request = pending.getObject("request", ProgramOrderCreateDto.class);
+                List<SeatVo> seats = pending.getJSONArray("seats").toJavaList(SeatVo.class);
+                OrderCreateDto order = buildCreateOrderParam(request, seats, orderNumber);
+                createOrderSend.sendMessage(JSON.toJSONString(order),
+                        result -> log.info("待处理订单消息发送成功 orderNumber: {}", orderNumber),
+                        ex -> log.warn("待处理订单消息发送失败，稍后重试 orderNumber: {}", orderNumber, ex));
+            } catch (Exception e) {
+                log.warn("重试待处理订单失败 orderNumber: {}", entry.getKey(), e);
+            }
+          }
+        } catch (Exception e) {
+            log.error("读取待处理订单失败", e);
+        }
     }
     
     private OrderCreateDto buildCreateOrderParam(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList){
+        return buildCreateOrderParam(programOrderCreateDto, purchaseSeatList,
+                uidGenerator.getOrderNumber(programOrderCreateDto.getUserId(), ORDER_TABLE_COUNT));
+    }
+
+    private OrderCreateDto buildCreateOrderParam(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList, Long orderNumber){
         ProgramVo programVo = programService.simpleGetProgramAndShowMultipleCache(programOrderCreateDto.getProgramId());
         OrderCreateDto orderCreateDto = new OrderCreateDto();
-        orderCreateDto.setOrderNumber(uidGenerator.getOrderNumber(programOrderCreateDto.getUserId(),ORDER_TABLE_COUNT));
+        orderCreateDto.setOrderNumber(orderNumber);
         orderCreateDto.setProgramId(programOrderCreateDto.getProgramId());
         orderCreateDto.setProgramItemPicture(programVo.getItemPicture());
         orderCreateDto.setUserId(programOrderCreateDto.getUserId());
@@ -334,26 +409,40 @@ public class ProgramOrderService {
         return createOrderResponse.getData();
     }
     
-    private String createOrderByMq(OrderCreateDto orderCreateDto,List<SeatVo> purchaseSeatList){
+    private String createOrderByMq(OrderCreateDto orderCreateDto){
         CreateOrderMqDomain createOrderMqDomain = new CreateOrderMqDomain();
         CountDownLatch latch = new CountDownLatch(1);
-        createOrderSend.sendMessage(JSON.toJSONString(orderCreateDto),sendResult -> {
-            createOrderMqDomain.orderNumber = String.valueOf(orderCreateDto.getOrderNumber());
-            assert sendResult != null;
-            log.info("创建订单kafka发送消息成功 topic : {}",sendResult.getRecordMetadata().topic());
-            latch.countDown();
-        },ex -> {
-            log.error("创建订单kafka发送消息失败 error",ex);
-            log.error("创建订单失败 需人工处理 orderCreateDto : {}",JSON.toJSONString(orderCreateDto));
-            updateProgramCacheDataResolution(orderCreateDto.getProgramId(),purchaseSeatList,OrderStatus.CANCEL);
-            createOrderMqDomain.daMaiFrameException = new DaMaiFrameException(ex);
-            latch.countDown();
-        });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         try {
-            latch.await();
+            createOrderSend.sendMessage(JSON.toJSONString(orderCreateDto),sendResult -> {
+                try {
+                    createOrderMqDomain.orderNumber = String.valueOf(orderCreateDto.getOrderNumber());
+                    assert sendResult != null;
+                    log.info("创建订单kafka发送消息成功 topic : {}",sendResult.getRecordMetadata().topic());
+                } finally {
+                    latch.countDown();
+                }
+            },ex -> {
+                createOrderMqDomain.daMaiFrameException = new OrderPendingException(orderCreateDto.getOrderNumber());
+                try {
+                    log.warn("订单消息发送结果未确认，等待重试 orderNumber: {}", orderCreateDto.getOrderNumber(), ex);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("订单消息发送未完成，等待重试 orderNumber: {}", orderCreateDto.getOrderNumber(), e);
+            throw new OrderPendingException(orderCreateDto.getOrderNumber());
+        }
+        try {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0 || !latch.await(remaining, TimeUnit.NANOSECONDS)) {
+                throw new OrderPendingException(orderCreateDto.getOrderNumber());
+            }
         } catch (InterruptedException e) {
             log.error("createOrderByMq InterruptedException",e);
-            throw new DaMaiFrameException(e);
+            Thread.currentThread().interrupt();
+            throw new OrderPendingException(orderCreateDto.getOrderNumber());
         }
         if (Objects.nonNull(createOrderMqDomain.daMaiFrameException)) {
             throw createOrderMqDomain.daMaiFrameException;
