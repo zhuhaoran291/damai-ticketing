@@ -12,6 +12,7 @@ import com.damai.page.PageVo;
 import com.damai.service.ProgramService;
 import com.damai.vo.ProgramHomeVo;
 import com.damai.vo.ProgramListVo;
+import com.damai.vo.ProgramSearchPageVo;
 import com.damai.vo.ProgramVo;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -46,7 +47,7 @@ public class ProgramController {
     
     @Operation(summary  = "搜索")
     @PostMapping(value = "/search")
-    public ApiResponse<PageVo<ProgramListVo>> search(@Valid @RequestBody ProgramSearchDto programSearchDto) {
+    public ApiResponse<ProgramSearchPageVo> search(@Valid @RequestBody ProgramSearchDto programSearchDto) {
         return ApiResponse.ok(programService.search(programSearchDto));
     }
     

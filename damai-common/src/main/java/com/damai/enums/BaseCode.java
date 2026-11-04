@@ -172,6 +172,8 @@ public enum BaseCode {
     
     CAN_NOT_CANCEL(40032,"订单不是未支付状态不能取消"),
     
+    PROGRAM_SEARCH_NOT_AVAILABLE(40033,"搜索暂不可用，请稍后重试"),
+    
     DELAY_QUEUE_CLIENT_NOT_EXIST(50001,"延迟队列客户端不存在"),
     
     DELAY_QUEUE_MESSAGE_NOT_EXIST(50002,"延迟队列消息不存在"),

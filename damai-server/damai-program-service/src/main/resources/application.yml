@@ -97,7 +97,10 @@ management:
         include: '*'
   health:
     elasticsearch:
-      enabled: false
+      # 打开 ES 健康检查：ES 挂了要让 /actuator/health 能看出来。
+      # 注意：如果希望"搜索降级不影响其他接口"，K8s 的存活/就绪探针应该用 health group 指定 liveness/readiness，
+      # 而不是直接拿整体 health 当存活判断，否则 ES 一挂实例就会被重启。
+      enabled: true
   prometheus:
     metrics:
       export:
@@ -110,6 +113,24 @@ elasticsearch:
   ip: 127.0.0.1:9200
   userName: elastic
   passWord: elastic
+  # 默认 40 秒太长：ES 假死时会把 Tomcat 线程一直占住，最终拖垮整个服务。检索类调用 1~2 秒足够。
+  connectTimeOut: 2000
+  socketTimeOut: 2000
+  connectionRequestTimeOut: 2000
+# 搜索降级（Issue #11）：ES 挂了之后的兜底与保护
+search:
+  circuit-breaker:
+    # 最近 20 次调用组成滑动窗口，窗口内失败率超过 50% 且调用数 ≥ 10 就跳闸
+    window-size: 20
+    min-calls: 10
+    failure-rate-threshold: 0.5
+    # 跳闸 10 秒后放 1 个探针试探，成功则恢复
+    open-seconds: 10
+    half-open-probes: 1
+  fallback-rate-limit:
+    # 兜底查库是 like 全表扫描，按令牌桶限流：每秒补 50 个，桶容量 100（允许短时突发）
+    permits-per-second: 50
+    bucket-capacity: 100
 delay:
   queue:
     corePoolSize: 1

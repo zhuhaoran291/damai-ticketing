@@ -80,4 +80,50 @@
             order by dp.issue_time asc
         </if>
     </select>
+    
+    <!-- 搜索降级查询：ES 不可用时用 like 兜底。
+         注意 like '%x%' 用不上索引、会全表扫描，只用于降级路径，线上需要配合限流。 -->
+    <select id="selectSearch" parameterType="com.damai.dto.ProgramSearchDto" resultType="com.damai.entity.ProgramJoinShowTime">
+        select
+            dp.id,dp.area_id,dp.program_category_id,dp.parent_program_category_id,dp.title,dp.actor,
+            dp.place,dp.item_picture,ds.show_time,ds.show_week_time,ds.show_day_time
+        from 
+            d_program dp left join d_program_show_time ds
+        on dp.id = ds.program_id
+        where 
+            dp.status = 1 and ds.status = 1 and dp.program_status = 1
+            <if test ='programSearchDto.areaId != null'>
+                and dp.area_id = #{programSearchDto.areaId,jdbcType=BIGINT}
+            </if>
+            <if test ='programSearchDto.parentProgramCategoryId != null'>
+                and dp.parent_program_category_id = #{programSearchDto.parentProgramCategoryId,jdbcType=BIGINT}
+            </if>
+            <if test ='programSearchDto.programCategoryId != null'>
+                and dp.program_category_id = #{programSearchDto.programCategoryId,jdbcType=BIGINT}
+            </if>
+            <if test ='programSearchDto.startDateTime != null'>
+                and ds.show_day_time &gt;= #{programSearchDto.startDateTime}
+            </if>
+            <if test ='programSearchDto.endDateTime != null'>
+                and ds.show_day_time &lt;= #{programSearchDto.endDateTime}
+            </if>
+            <if test ='programSearchDto.content != null and programSearchDto.content != ""'>
+                and (dp.title like concat('%', #{programSearchDto.content}, '%')
+                    or dp.actor like concat('%', #{programSearchDto.content}, '%'))
+            </if>
+        <choose>
+            <when test ='programSearchDto.type == 2'>
+                order by dp.high_heat desc
+            </when>
+            <when test ='programSearchDto.type == 3'>
+                order by ds.show_time asc
+            </when>
+            <when test ='programSearchDto.type == 4'>
+                order by dp.issue_time asc
+            </when>
+            <otherwise>
+                order by dp.id asc
+            </otherwise>
+        </choose>
+    </select>
 </mapper>
