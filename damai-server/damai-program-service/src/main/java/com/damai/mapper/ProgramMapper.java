@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.damai.dto.ProgramListDto;
 import com.damai.dto.ProgramPageListDto;
+import com.damai.dto.ProgramSearchDto;
 import com.damai.entity.Program;
 import com.damai.entity.ProgramJoinShowTime;
 import org.apache.ibatis.annotations.Param;
@@ -33,4 +34,13 @@ public interface ProgramMapper extends BaseMapper<Program> {
      * */
     IPage<ProgramJoinShowTime> selectPage(IPage<ProgramJoinShowTime> page, 
                                           @Param("programPageListDto")ProgramPageListDto programPageListDto);
+    
+    /**
+     * 搜索降级查询（ES 不可用时使用，带关键词 like 条件）
+     * @param page 分页对象
+     * @param programSearchDto 参数
+     * @return 结果
+     * */
+    IPage<ProgramJoinShowTime> selectSearch(IPage<ProgramJoinShowTime> page,
+                                            @Param("programSearchDto")ProgramSearchDto programSearchDto);
 }

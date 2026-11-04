@@ -97,7 +97,10 @@ management:
         include: '*'
   health:
     elasticsearch:
-      enabled: false
+      # 打开 ES 健康检查：ES 挂了要让 /actuator/health 能看出来。
+      # 注意：如果希望"搜索降级不影响其他接口"，K8s 的存活/就绪探针应该用 health group 指定 liveness/readiness，
+      # 而不是直接拿整体 health 当存活判断，否则 ES 一挂实例就会被重启。
+      enabled: true
   prometheus:
     metrics:
       export:
@@ -110,6 +113,10 @@ elasticsearch:
   ip: 127.0.0.1:9200
   userName: elastic
   passWord: elastic
+  # 默认 40 秒太长：ES 假死时会把 Tomcat 线程一直占住，最终拖垮整个服务。检索类调用 1~2 秒足够。
+  connectTimeOut: 2000
+  socketTimeOut: 2000
+  connectionRequestTimeOut: 2000
 delay:
   queue:
     corePoolSize: 1

@@ -216,7 +216,6 @@ public class ProgramEs {
     }
     
     public PageVo<ProgramListVo> search(ProgramSearchDto programSearchDto) {
-        PageVo<ProgramListVo> pageVo = new PageVo<>();
         try {
             BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
             if (Objects.nonNull(programSearchDto.getAreaId())) {
@@ -261,11 +260,13 @@ public class ProgramEs {
             businessEsHandle.executeQuery(SpringUtil.getPrefixDistinctionName() + "-" + ProgramDocumentParamName.INDEX_NAME,
                     ProgramDocumentParamName.INDEX_TYPE,list,pageInfo,ProgramListVo.class,
                     searchSourceBuilder,Arrays.asList(ProgramDocumentParamName.TITLE,ProgramDocumentParamName.ACTOR));
-            pageVo = PageUtil.convertPage(pageInfo,programListVo -> programListVo);
+            return PageUtil.convertPage(pageInfo,programListVo -> programListVo);
         }catch (Exception e) {
-            log.error("search error",e);
+            // 不在这里吞异常：吞掉之后上游拿到的是"0 条"，分不清"确实没有"和"检索挂了"。
+            // 抛出后由 ProgramService 决定是否降级查库。
+            log.error("ES search error",e);
+            throw new EsSearchException("ES检索失败：" + e.getMessage(), e);
         }
-        return pageVo;
     }
     
     public HighlightBuilder getHighlightBuilder(List<String> fieldNameList){

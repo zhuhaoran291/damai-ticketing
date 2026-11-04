@@ -61,6 +61,7 @@ import com.damai.service.cache.local.LocalCacheProgramGroup;
 import com.damai.service.cache.local.LocalCacheProgramShowTime;
 import com.damai.service.cache.local.LocalCacheTicketCategory;
 import com.damai.service.constant.ProgramTimeType;
+import com.damai.service.es.EsSearchException;
 import com.damai.service.es.ProgramEs;
 import com.damai.service.lua.ProgramDelCacheData;
 import com.damai.service.tool.TokenExpireManager;
@@ -75,6 +76,7 @@ import com.damai.vo.AreaVo;
 import com.damai.vo.ProgramGroupVo;
 import com.damai.vo.ProgramHomeVo;
 import com.damai.vo.ProgramListVo;
+import com.damai.vo.ProgramSearchPageVo;
 import com.damai.vo.ProgramSimpleInfoVo;
 import com.damai.vo.ProgramVo;
 import com.damai.vo.TicketCategoryVo;
@@ -214,10 +216,26 @@ public class ProgramService extends ServiceImpl<ProgramMapper, Program> {
      * @param programSearchDto 搜索节目数据的入参
      * @return 执行后的结果
      * */
-    public PageVo<ProgramListVo> search(ProgramSearchDto programSearchDto) {
+    public ProgramSearchPageVo search(ProgramSearchDto programSearchDto) {
         //将入参的参数进行具体的组装
         setQueryTime(programSearchDto);
-        return programEs.search(programSearchDto);
+        try {
+            //ES 正常：返回的可能是空结果，空结果就是"确实没有"，不降级
+            return ProgramSearchPageVo.of(programEs.search(programSearchDto), false);
+        }catch (EsSearchException esError) {
+            //ES 不可用：和"没有结果"区分开，走数据库兜底
+            log.warn("ES检索不可用，降级为数据库查询。content:{}，areaId:{}，原因:{}",
+                    programSearchDto.getContent(), programSearchDto.getAreaId(), esError.getMessage());
+        }
+        try {
+            PageVo<ProgramListVo> pageVo = dbSearchByKeyword(programSearchDto);
+            log.warn("数据库降级查询成功，totalSize:{}", pageVo.getTotalSize());
+            return ProgramSearchPageVo.of(pageVo, true);
+        }catch (Exception dbError) {
+            //兜底也失败：明确告诉调用方"搜索不可用"，而不是返回空列表
+            log.error("数据库降级查询也失败", dbError);
+            throw new DaMaiFrameException(BaseCode.PROGRAM_SEARCH_NOT_AVAILABLE);
+        }
     }
     
     /**
@@ -366,8 +384,29 @@ public class ProgramService extends ServiceImpl<ProgramMapper, Program> {
      * @return 执行后的结果
      * */
     public PageVo<ProgramListVo> dbSelectPage(ProgramPageListDto programPageListDto) {
-        IPage<ProgramJoinShowTime> iPage = 
+        IPage<ProgramJoinShowTime> iPage =
                 programMapper.selectPage(PageUtil.getPageParams(programPageListDto), programPageListDto);
+        return convertDbPage(iPage);
+    }
+    
+    /**
+     * 搜索降级查询：ES 不可用时用 like 查数据库
+     * 注意：like '%x%' 用不上索引、会全表扫描，只适合作为降级路径，线上需要配合限流
+     * @param programSearchDto 搜索入参
+     * @return 执行后的结果
+     * */
+    private PageVo<ProgramListVo> dbSearchByKeyword(ProgramSearchDto programSearchDto) {
+        IPage<ProgramJoinShowTime> iPage =
+                programMapper.selectSearch(PageUtil.getPageParams(programSearchDto), programSearchDto);
+        return convertDbPage(iPage);
+    }
+    
+    /**
+     * 数据库查询结果转换成页面数据（分页查询和搜索降级共用）
+     * @param iPage 数据库分页结果
+     * @return 执行后的结果
+     * */
+    private PageVo<ProgramListVo> convertDbPage(IPage<ProgramJoinShowTime> iPage) {
         if (CollectionUtil.isEmpty(iPage.getRecords())) {
             return new PageVo<>(iPage.getCurrent(), iPage.getSize(), iPage.getTotal(), new ArrayList<>());
         }
