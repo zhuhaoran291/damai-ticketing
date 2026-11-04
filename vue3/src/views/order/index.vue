@@ -147,7 +147,7 @@ import { getUserIdKey} from "@/utils/auth";
 import { getPersonInfoId} from '@/api/personInfo'
 import {getTicketUser} from "@/api/buyTicketUser";
 import {getOrderCacheApi, orderCreateV1Api, orderCreateV2Api, orderCreateV3Api, orderCreateV4Api} from '@/api/order.js'
-import {ElMessage} from "element-plus";
+import {ElMessage, ElMessageBox} from "element-plus";
 //获取用户信息
 import useUserStore from "../../store/modules/user";
 
@@ -387,7 +387,11 @@ function submitOrder(){
             stopPolling();
           }
         }, tenSecond);
+      }else if (String(response.code) === '40034') {
+        loadingClose();
+        ElMessageBox.alert(response.message, '订单结果待确认', {confirmButtonText: '知道了'});
       }else{
+        loadingClose();
         dialogShow();
       }
     })

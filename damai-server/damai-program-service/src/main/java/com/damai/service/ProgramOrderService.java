@@ -32,6 +32,7 @@ import com.damai.vo.SeatVo;
 import com.damai.vo.TicketCategoryVo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -57,6 +58,9 @@ import static com.damai.service.constant.ProgramOrderConstant.ORDER_TABLE_COUNT;
 @Slf4j
 @Service
 public class ProgramOrderService {
+
+    @Value("${damai.order.mq-wait-millis:3000}")
+    private long mqWaitMillis = 3000;
     
     @Autowired
     private OrderClient orderClient;
@@ -335,32 +339,58 @@ public class ProgramOrderService {
     }
     
     private String createOrderByMq(OrderCreateDto orderCreateDto,List<SeatVo> purchaseSeatList){
-        CreateOrderMqDomain createOrderMqDomain = new CreateOrderMqDomain();
+        CreateOrderMqDomain result = new CreateOrderMqDomain();
         CountDownLatch latch = new CountDownLatch(1);
-        createOrderSend.sendMessage(JSON.toJSONString(orderCreateDto),sendResult -> {
-            createOrderMqDomain.orderNumber = String.valueOf(orderCreateDto.getOrderNumber());
-            assert sendResult != null;
-            log.info("创建订单kafka发送消息成功 topic : {}",sendResult.getRecordMetadata().topic());
-            latch.countDown();
-        },ex -> {
-            log.error("创建订单kafka发送消息失败 error",ex);
-            log.error("创建订单失败 需人工处理 orderCreateDto : {}",JSON.toJSONString(orderCreateDto));
-            updateProgramCacheDataResolution(orderCreateDto.getProgramId(),purchaseSeatList,OrderStatus.CANCEL);
-            createOrderMqDomain.daMaiFrameException = new DaMaiFrameException(ex);
-            latch.countDown();
-        });
         try {
-            latch.await();
-        } catch (InterruptedException e) {
-            log.error("createOrderByMq InterruptedException",e);
-            throw new DaMaiFrameException(e);
+            createOrderSend.sendMessage(JSON.toJSONString(orderCreateDto), sendResult -> {
+                try {
+                    if (sendResult == null) {
+                        throw new IllegalStateException("Kafka send result is null");
+                    }
+                    log.info("创建订单kafka发送消息成功 topic : {}", sendResult.getRecordMetadata().topic());
+                    result.orderNumber = String.valueOf(orderCreateDto.getOrderNumber());
+                } catch (Exception ex) {
+                    result.daMaiFrameException = new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(), "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), ex);
+                    log.error("创建订单消息成功回调处理失败 orderNumber: {}", orderCreateDto.getOrderNumber(), ex);
+                } finally {
+                    latch.countDown();
+                }
+            }, ex -> {
+                try {
+                    log.error("创建订单kafka发送消息失败 orderCreateDto : {}", JSON.toJSONString(orderCreateDto), ex);
+                    updateProgramCacheDataResolution(orderCreateDto.getProgramId(), purchaseSeatList, OrderStatus.CANCEL);
+                    result.daMaiFrameException = new DaMaiFrameException(BaseCode.SYSTEM_ERROR.getCode(), "订单消息发送失败", ex);
+                } catch (Exception callbackException) {
+                    result.daMaiFrameException = new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(), "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), callbackException);
+                    log.error("创建订单失败后恢复座位异常 orderCreateDto: {}", JSON.toJSONString(orderCreateDto), callbackException);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        } catch (RuntimeException ex) {
+            // send() 本身也可能同步抛出异常，保留上下文，不推断消息一定未发送。
+            log.error("创建订单消息发送异常，结果待确认 orderCreateDto: {}", JSON.toJSONString(orderCreateDto), ex);
+            throw new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(),
+                    "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), ex);
         }
-        if (Objects.nonNull(createOrderMqDomain.daMaiFrameException)) {
-            throw createOrderMqDomain.daMaiFrameException;
+        try {
+            if (!latch.await(mqWaitMillis, TimeUnit.MILLISECONDS)) {
+                log.error("等待创建订单消息回调超时，结果待确认 orderCreateDto: {}", JSON.toJSONString(orderCreateDto));
+                throw new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(),
+                        "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber());
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            log.error("等待创建订单消息回调被中断，结果待确认 orderCreateDto: {}", JSON.toJSONString(orderCreateDto), ex);
+            throw new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(),
+                    "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), ex);
         }
-        return createOrderMqDomain.orderNumber;
+        if (Objects.nonNull(result.daMaiFrameException)) {
+            throw result.daMaiFrameException;
+        }
+        return result.orderNumber;
     }
-    
+
     private void updateProgramCacheDataResolution(Long programId,List<SeatVo> seatVoList,OrderStatus orderStatus){
         if (!(Objects.equals(orderStatus.getCode(), OrderStatus.NO_PAY.getCode()) ||
                 Objects.equals(orderStatus.getCode(), OrderStatus.CANCEL.getCode()))) {
