@@ -117,6 +117,20 @@ elasticsearch:
   connectTimeOut: 2000
   socketTimeOut: 2000
   connectionRequestTimeOut: 2000
+# 搜索降级（Issue #11）：ES 挂了之后的兜底与保护
+search:
+  circuit-breaker:
+    # 最近 20 次调用组成滑动窗口，窗口内失败率超过 50% 且调用数 ≥ 10 就跳闸
+    window-size: 20
+    min-calls: 10
+    failure-rate-threshold: 0.5
+    # 跳闸 10 秒后放 1 个探针试探，成功则恢复
+    open-seconds: 10
+    half-open-probes: 1
+  fallback-rate-limit:
+    # 兜底查库是 like 全表扫描，按令牌桶限流：每秒补 50 个，桶容量 100（允许短时突发）
+    permits-per-second: 50
+    bucket-capacity: 100
 delay:
   queue:
     corePoolSize: 1

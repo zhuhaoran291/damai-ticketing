@@ -11,6 +11,7 @@ import com.damai.enums.BusinessStatus;
 import com.damai.page.PageUtil;
 import com.damai.page.PageVo;
 import com.damai.service.init.ProgramDocumentParamName;
+import com.damai.service.resilience.EsCircuitBreaker;
 import com.damai.service.tool.ProgramPageOrder;
 import com.damai.util.BusinessEsHandle;
 import com.damai.util.StringUtil;
@@ -30,6 +31,7 @@ import org.elasticsearch.search.sort.FieldSortBuilder;
 import org.elasticsearch.search.sort.ScriptSortBuilder;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -48,6 +50,9 @@ public class ProgramEs {
     
     @Resource
     private BusinessEsHandle businessEsHandle;
+    
+    @Autowired
+    private EsCircuitBreaker esCircuitBreaker;
     
     public List<ProgramHomeVo> selectHomeList(ProgramListDto programListDto) {
         List<ProgramHomeVo> programHomeVoList = new ArrayList<>();
@@ -216,6 +221,10 @@ public class ProgramEs {
     }
     
     public PageVo<ProgramListVo> search(ProgramSearchDto programSearchDto) {
+        //熔断打开时直接失败（0 耗时），不再产生"等 2 秒超时"的无效调用
+        if (!esCircuitBreaker.allowRequest()) {
+            throw new EsSearchException("ES熔断中，跳过调用");
+        }
         try {
             BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
             if (Objects.nonNull(programSearchDto.getAreaId())) {
@@ -260,8 +269,10 @@ public class ProgramEs {
             businessEsHandle.executeQuery(SpringUtil.getPrefixDistinctionName() + "-" + ProgramDocumentParamName.INDEX_NAME,
                     ProgramDocumentParamName.INDEX_TYPE,list,pageInfo,ProgramListVo.class,
                     searchSourceBuilder,Arrays.asList(ProgramDocumentParamName.TITLE,ProgramDocumentParamName.ACTOR));
+            esCircuitBreaker.onSuccess();
             return PageUtil.convertPage(pageInfo,programListVo -> programListVo);
         }catch (Exception e) {
+            esCircuitBreaker.onFailure();
             // 不在这里吞异常：吞掉之后上游拿到的是"0 条"，分不清"确实没有"和"检索挂了"。
             // 抛出后由 ProgramService 决定是否降级查库。
             log.error("ES search error",e);

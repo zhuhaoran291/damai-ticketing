@@ -63,6 +63,7 @@ import com.damai.service.cache.local.LocalCacheTicketCategory;
 import com.damai.service.constant.ProgramTimeType;
 import com.damai.service.es.EsSearchException;
 import com.damai.service.es.ProgramEs;
+import com.damai.service.resilience.FallbackRateLimiter;
 import com.damai.service.lua.ProgramDelCacheData;
 import com.damai.service.tool.TokenExpireManager;
 import com.damai.servicelock.LockType;
@@ -168,6 +169,9 @@ public class ProgramService extends ServiceImpl<ProgramMapper, Program> {
     private ProgramEs programEs;
     
     @Autowired
+    private FallbackRateLimiter fallbackRateLimiter;
+    
+    @Autowired
     private ServiceLockTool serviceLockTool;
     
     @Autowired
@@ -226,6 +230,11 @@ public class ProgramService extends ServiceImpl<ProgramMapper, Program> {
             //ES 不可用：和"没有结果"区分开，走数据库兜底
             log.warn("ES检索不可用，降级为数据库查询。content:{}，areaId:{}，原因:{}",
                     programSearchDto.getContent(), programSearchDto.getAreaId(), esError.getMessage());
+        }
+        //降级查库是 like 全表扫描，必须限流：宁可让用户重试，也不能把数据库拖死
+        if (!fallbackRateLimiter.tryAcquire()) {
+            log.error("数据库降级查询被限流拒绝，content:{}", programSearchDto.getContent());
+            throw new DaMaiFrameException(BaseCode.PROGRAM_SEARCH_NOT_AVAILABLE);
         }
         try {
             PageVo<ProgramListVo> pageVo = dbSearchByKeyword(programSearchDto);

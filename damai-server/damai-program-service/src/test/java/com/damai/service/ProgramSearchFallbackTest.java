@@ -13,6 +13,7 @@ import com.damai.mapper.TicketCategoryMapper;
 import com.damai.page.PageVo;
 import com.damai.service.es.EsSearchException;
 import com.damai.service.es.ProgramEs;
+import com.damai.service.resilience.FallbackRateLimiter;
 import com.damai.vo.AreaVo;
 import com.damai.vo.ProgramListVo;
 import com.damai.vo.ProgramSearchPageVo;
@@ -68,6 +69,9 @@ class ProgramSearchFallbackTest {
     @Mock
     private BaseDataClient baseDataClient;
 
+    @Mock
+    private FallbackRateLimiter fallbackRateLimiter;
+
     @InjectMocks
     private ProgramService programService;
 
@@ -86,6 +90,7 @@ class ProgramSearchFallbackTest {
     @DisplayName("ES 不可用 → 降级查库，结果标记 degraded=true")
     void esDown_thenFallbackToDb() {
         when(programEs.search(any())).thenThrow(new EsSearchException("Connection refused"));
+        when(fallbackRateLimiter.tryAcquire()).thenReturn(true);
         when(programMapper.selectSearch(any(), any())).thenReturn(dbPage(1L, "周杰伦嘉年华演唱会"));
         when(baseDataClient.selectByIdList(any())).thenReturn(ApiResponse.ok(new ArrayList<AreaVo>()));
 
@@ -98,9 +103,23 @@ class ProgramSearchFallbackTest {
     }
 
     @Test
+    @DisplayName("降级也被限流拒绝 → 抛 40033，且一次都不查库")
+    void esDown_andFallbackRateLimited_thenThrow() {
+        when(programEs.search(any())).thenThrow(new EsSearchException("Connection refused"));
+        when(fallbackRateLimiter.tryAcquire()).thenReturn(false);
+
+        DaMaiFrameException ex = assertThrows(DaMaiFrameException.class,
+                () -> programService.search(request()));
+
+        assertEquals(BaseCode.PROGRAM_SEARCH_NOT_AVAILABLE.getCode(), ex.getCode());
+        verify(programMapper, never()).selectSearch(any(), any());
+    }
+
+    @Test
     @DisplayName("ES 和数据库都失败 → 抛 40033，不再返回成功 + 空列表")
     void esDown_andDbDown_thenThrowBusinessCode() {
         when(programEs.search(any())).thenThrow(new EsSearchException("Connection refused"));
+        when(fallbackRateLimiter.tryAcquire()).thenReturn(true);
         when(programMapper.selectSearch(any(), any())).thenThrow(new RuntimeException("db timeout"));
 
         DaMaiFrameException ex = assertThrows(DaMaiFrameException.class,
