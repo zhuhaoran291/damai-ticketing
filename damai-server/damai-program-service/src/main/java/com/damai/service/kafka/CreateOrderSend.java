@@ -33,8 +33,16 @@ public class CreateOrderSend {
     public void sendMessage(String message, SuccessCallback<SendResult<String, String>> successCallback, 
                             FailureCallback failureCallback) {
         log.info("创建订单kafka发送消息 消息体 : {}", message);
-        CompletableFuture<SendResult<String, String>> completableFuture = 
-                kafkaTemplate.send(SpringUtil.getPrefixDistinctionName() + "-" + kafkaTopic.getTopic(), message);
+        String topic = SpringUtil.getPrefixDistinctionName() + "-" + kafkaTopic.getTopic();
+        try {
+            // partitionsFor only requests metadata; send has not been invoked yet.
+            if (kafkaTemplate.partitionsFor(topic).isEmpty()) {
+                throw new IllegalStateException("Kafka topic has no partitions");
+            }
+        } catch (RuntimeException ex) {
+            throw new OrderMessageNotSentException(ex);
+        }
+        CompletableFuture<SendResult<String, String>> completableFuture = kafkaTemplate.send(topic, message);
         // 已完成的 future 也不要在请求线程内执行可能阻塞的回调。
         completableFuture.whenCompleteAsync((result,ex) -> {
             if (Objects.isNull(ex)) {

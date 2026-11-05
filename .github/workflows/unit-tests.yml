@@ -24,6 +24,14 @@ jobs:
       - name: Run unit tests
         run: mvn -B -pl damai-server/damai-program-service -am test -Dspotless.check.skip=true
 
+      - name: Test Redis reservation recovery
+        run: |
+          if ! command -v redis-server >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y redis-server
+          fi
+          python3 tests/test_issue10_release.py
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

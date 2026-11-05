@@ -3,6 +3,8 @@ local placeholder_seat_no_sold_hash_key = KEYS[2]
 local placeholder_seat_lock_hash_key = KEYS[3]
 local program_id = KEYS[4]
 local ticket_count_list = cjson.decode(ARGV[1])
+-- V4 supplies the order number before reserving; V3 supplies no third argument.
+local reservation_order_number = ARGV[3]
 local purchase_seat_list = {}
 local total_seat_dto_price = 0
 local total_seat_vo_price = 0
@@ -120,6 +122,11 @@ for index,seat in ipairs(purchase_seat_list) do
     end
     table.insert(seat_data_list[ticket_category_id], tostring(seat_id))
     seat.sellStatus = 2
+    if reservation_order_number then
+        seat.reservationOrderNumber = reservation_order_number
+    else
+        seat.reservationOrderNumber = nil
+    end
     table.insert(seat_data_list[ticket_category_id], cjson.encode(seat))
 end
 for index,ticket_count in ipairs(ticket_count_list) do
