@@ -4,6 +4,8 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.StrUtil;
 import com.damai.dto.ProgramOrderCreateDto;
 import com.damai.dto.SeatDto;
+import com.damai.enums.BaseCode;
+import com.damai.exception.DaMaiFrameException;
 import com.damai.locallock.LocalLockCache;
 import com.damai.lock.LockTask;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -29,6 +32,12 @@ public class BaseProgramOrder {
     
     public String localLockCreateOrder(String lockKeyPrefix, ProgramOrderCreateDto programOrderCreateDto, 
                                           LockTask<String> lockTask){
+        return localLockCreateOrder(lockKeyPrefix, programOrderCreateDto, lockTask, -1);
+    }
+
+    /** 使用一个总时限获取所有票档锁；获取失败时释放已经取得的锁。 */
+    public String localLockCreateOrder(String lockKeyPrefix, ProgramOrderCreateDto programOrderCreateDto,
+                                       LockTask<String> lockTask, long lockWaitMillis) {
         List<SeatDto> seatDtoList = programOrderCreateDto.getSeatDtoList();
         List<Long> ticketCategoryIdList = new ArrayList<>();
         if (CollectionUtil.isNotEmpty(seatDtoList)) {
@@ -45,23 +54,30 @@ public class BaseProgramOrder {
             ReentrantLock localLock = localLockCache.getLock(lockKey,false);
             localLockList.add(localLock);
         }
-        for (ReentrantLock reentrantLock : localLockList) {
-            try {
-                reentrantLock.lock();
-            }catch (Throwable t) {
-                break;
-            }
-            localLockSuccessList.add(reentrantLock);
-        }
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, lockWaitMillis));
         try {
+            for (ReentrantLock reentrantLock : localLockList) {
+                if (lockWaitMillis < 0) {
+                    reentrantLock.lock();
+                } else {
+                    long remainingNanos = Math.max(0, deadline - System.nanoTime());
+                    if (!reentrantLock.tryLock(remainingNanos, TimeUnit.NANOSECONDS)) {
+                        throw new DaMaiFrameException(BaseCode.OPERATION_IS_TOO_FREQUENT_PLEASE_TRY_AGAIN_LATER);
+                    }
+                }
+                localLockSuccessList.add(reentrantLock);
+            }
             return lockTask.execute();
-        }finally {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new DaMaiFrameException(BaseCode.OPERATION_IS_TOO_FREQUENT_PLEASE_TRY_AGAIN_LATER.getCode(),
+                    "等待下单锁时被中断，请稍后重试", ex);
+        } finally {
             for (int i = localLockSuccessList.size() - 1; i >= 0; i--) {
-                ReentrantLock reentrantLock = localLockSuccessList.get(i);
                 try {
-                    reentrantLock.unlock();
-                }catch (Throwable t) {
-                    log.error("local lock unlock error",t);
+                    localLockSuccessList.get(i).unlock();
+                } catch (Throwable t) {
+                    log.error("local lock unlock error", t);
                 }
             }
         }

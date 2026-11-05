@@ -11,6 +11,7 @@ import com.damai.service.strategy.BaseProgramOrder;
 import com.damai.service.strategy.ProgramOrderStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import static com.damai.core.DistributedLockConstants.PROGRAM_ORDER_CREATE_V4;
@@ -23,6 +24,9 @@ import static com.damai.core.DistributedLockConstants.PROGRAM_ORDER_CREATE_V4;
 @Slf4j
 @Component
 public class ProgramOrderV4Strategy implements ProgramOrderStrategy {
+
+    @Value("${damai.order.v4-lock-wait-millis:1000}")
+    private long lockWaitMillis = 1000;
     
     @Autowired
     private ProgramOrderService programOrderService;
@@ -46,7 +50,7 @@ public class ProgramOrderV4Strategy implements ProgramOrderStrategy {
     public String createOrder(ProgramOrderCreateDto programOrderCreateDto) {
         compositeContainer.execute(CompositeCheckType.PROGRAM_ORDER_CREATE_CHECK.getValue(),programOrderCreateDto);
         return baseProgramOrder.localLockCreateOrder(PROGRAM_ORDER_CREATE_V4,programOrderCreateDto,
-                () -> programOrderService.createNewAsync(programOrderCreateDto));
+                () -> programOrderService.createNewAsync(programOrderCreateDto), Math.max(0, lockWaitMillis));
     }
     
     @Override

@@ -80,6 +80,12 @@ public enum RedisKeyManage {
     ACCOUNT_ORDER_COUNT("d_mai_account_order_count_%s_%s","账户下订单数量的key","账户下订单数量","k"),
     
     ORDER_MQ("d_mai_order_mq_%s","使用mq创建的订单的订单编号","使用mq创建的订单的订单编号","k"),
+
+    PROGRAM_ORDER_RESERVATION_LEDGER("d_mai_program_order_reservation_ledger","下单预留记录","下单预留记录","k"),
+
+    PROGRAM_ORDER_RESERVATION_DUE("d_mai_program_order_reservation_due","预留检查时间","预留检查时间","k"),
+
+    PROGRAM_ORDER_RECOVERY_LOCK("d_mai_program_order_recovery_lock_%s","订单补偿锁","订单补偿锁","k"),
     
     LOGIN_USER_MOBILE_ERROR("d_mai_login_user_mobile_error_%s","登录错误的用户手机号key","登录错误的用户手机号次数","k"),
     

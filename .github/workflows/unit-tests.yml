@@ -19,15 +19,25 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # 只跑 program-service 的单元测试，并把它依赖的模块一起构建（-am）。
+      # 运行节目和订单服务的单元测试，并构建其依赖模块（-am）。
       # 这批测试不启动 Spring 上下文，也不需要 MySQL / Redis / Nacos。
       - name: Run unit tests
-        run: mvn -B -pl damai-server/damai-program-service -am test -Dspotless.check.skip=true
+        run: mvn -B -pl damai-server/damai-program-service,damai-server/damai-order-service -am test -Dspotless.check.skip=true
+
+      - name: Test Redis reservation recovery
+        run: |
+          if ! command -v redis-server >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y redis-server
+          fi
+          python3 tests/test_issue10_release.py
 
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports
-          path: damai-server/damai-program-service/target/surefire-reports/
+          path: |
+            damai-server/damai-program-service/target/surefire-reports/
+            damai-server/damai-order-service/target/surefire-reports/
           if-no-files-found: ignore
