@@ -18,6 +18,9 @@ import java.util.List;
 @Data
 @Schema(title="OrderCreateDto", description ="订单创建")
 public class OrderCreateDto {
+
+    /** True only for V4 messages guarded by the reservation ledger. */
+    private Boolean reservationTracked;
     
     @Schema(name ="orderNumber", type ="Long", description ="订单编号", requiredMode= RequiredMode.REQUIRED)
     @NotNull

@@ -22,6 +22,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import com.damai.exception.DaMaiFrameException;
 import com.damai.enums.BaseCode;
+import com.damai.redis.OrderReservationLedger;
 import com.damai.mq.callback.FailureCallback;
 import com.damai.mq.callback.SuccessCallback;
 import com.damai.service.kafka.CreateOrderSend;
@@ -61,6 +62,7 @@ class ProgramOrderMqWaitTest {
         seat.setTicketCategoryId(6L);
         seats = List.of(seat);
         setField("releaseUnsentReservation", release);
+        setField("reservationLedger", mock(OrderReservationLedger.class));
         setField("createOrderSend", sender);
         setField("programCacheResolutionOperate", cache);
         setField("mqWaitMillis", 100L);
@@ -196,6 +198,8 @@ class ProgramOrderMqWaitTest {
             });
             request.get(3, TimeUnit.SECONDS);
             assertTrue(callbackStarted.await(3, TimeUnit.SECONDS));
+            verify(template).partitionsFor("test-create_order_reservation");
+            verify(template).send("test-create_order_reservation", "{}");
         } finally {
             releaseCallback.countDown();
             executor.shutdownNow();

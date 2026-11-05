@@ -19,6 +19,7 @@ import com.damai.enums.OrderStatus;
 import com.damai.enums.SellStatus;
 import com.damai.exception.DaMaiFrameException;
 import com.damai.redis.RedisKeyBuild;
+import com.damai.redis.OrderReservationLedger;
 import com.damai.service.delaysend.DelayOrderCancelSend;
 import com.damai.service.kafka.CreateOrderMqDomain;
 import com.damai.service.kafka.CreateOrderSend;
@@ -63,6 +64,9 @@ public class ProgramOrderService {
 
     @Value("${damai.order.mq-wait-millis:3000}")
     private long mqWaitMillis = 3000;
+
+    @Value("${damai.order.reservation-timeout-millis:30000}")
+    private long reservationTimeoutMillis = 30000;
     
     @Autowired
     private OrderClient orderClient;
@@ -84,6 +88,9 @@ public class ProgramOrderService {
 
     @Autowired
     private ProgramCacheReleaseUnsentReservation releaseUnsentReservation;
+
+    @Autowired
+    private OrderReservationLedger reservationLedger;
     
     @Autowired
     private ProgramService programService;
@@ -225,7 +232,7 @@ public class ProgramOrderService {
         Long programId = programOrderCreateDto.getProgramId();
         List<SeatDto> seatDtoList = programOrderCreateDto.getSeatDtoList();
         List<String> keys = new ArrayList<>();
-        String[] data = new String[reservationOrderNumber == null ? 2 : 3];
+        String[] data = new String[reservationOrderNumber == null ? 2 : 5];
         JSONArray jsonArray = new JSONArray();
         JSONArray addSeatDatajsonArray = new JSONArray();
         if (CollectionUtil.isNotEmpty(seatDtoList)) {
@@ -268,6 +275,10 @@ public class ProgramOrderService {
         data[1] = JSON.toJSONString(addSeatDatajsonArray);
         if (reservationOrderNumber != null) {
             data[2] = String.valueOf(reservationOrderNumber);
+            data[3] = JSON.toJSONString(programOrderCreateDto);
+            data[4] = String.valueOf(Math.max(1000L, reservationTimeoutMillis));
+            keys.add(RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_RESERVATION_LEDGER));
+            keys.add(RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_RESERVATION_DUE));
         }
         ProgramCacheCreateOrderData programCacheCreateOrderData = 
                 programCacheCreateOrderResolutionOperate.programCacheOperate(keys, data);
@@ -291,15 +302,17 @@ public class ProgramOrderService {
     
     private String doCreateV2(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList,
                               Long orderNumber){
-        OrderCreateDto orderCreateDto = buildCreateOrderParam(programOrderCreateDto, purchaseSeatList, orderNumber);
-        
-        String createdOrderNumber = createOrderByMq(orderCreateDto,purchaseSeatList);
-        
-        DelayOrderCancelDto delayOrderCancelDto = new DelayOrderCancelDto();
-        delayOrderCancelDto.setOrderNumber(orderCreateDto.getOrderNumber());
-        delayOrderCancelSend.sendMessage(JSON.toJSONString(delayOrderCancelDto));
-        
-        return createdOrderNumber;
+        final OrderCreateDto orderCreateDto;
+        try {
+            orderCreateDto = buildCreateOrderParam(programOrderCreateDto, purchaseSeatList, orderNumber);
+            orderCreateDto.setReservationTracked(true);
+        } catch (RuntimeException ex) {
+            log.error("占座后构建订单消息失败，等待预留对账 orderNumber: {}", orderNumber, ex);
+            throw new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(),
+                    "订单结果待确认，请勿重复下单，订单号: " + orderNumber, ex);
+        }
+        // Tracked V4 orders schedule delayed cancellation after successful consumption.
+        return createOrderByMq(orderCreateDto,purchaseSeatList);
     }
     
     private OrderCreateDto buildCreateOrderParam(ProgramOrderCreateDto programOrderCreateDto,List<SeatVo> purchaseSeatList){
@@ -363,6 +376,7 @@ public class ProgramOrderService {
         CreateOrderMqDomain result = new CreateOrderMqDomain();
         CountDownLatch latch = new CountDownLatch(1);
         try {
+            markMessageStatus(orderCreateDto.getOrderNumber(), "SENDING");
             createOrderSend.sendMessage(JSON.toJSONString(orderCreateDto), sendResult -> {
                 try {
                     if (sendResult == null) {
@@ -370,6 +384,7 @@ public class ProgramOrderService {
                     }
                     log.info("创建订单kafka发送消息成功 topic : {}", sendResult.getRecordMetadata().topic());
                     result.orderNumber = String.valueOf(orderCreateDto.getOrderNumber());
+                    markMessageStatus(orderCreateDto.getOrderNumber(), "ACKNOWLEDGED");
                 } catch (Exception ex) {
                     result.daMaiFrameException = new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(), "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), ex);
                     log.error("创建订单消息成功回调处理失败 orderNumber: {}", orderCreateDto.getOrderNumber(), ex);
@@ -379,6 +394,7 @@ public class ProgramOrderService {
             }, ex -> {
                 try {
                     // An asynchronous failure may follow an accepted send. Do not restore seats here.
+                    markMessageStatus(orderCreateDto.getOrderNumber(), "UNKNOWN");
                     log.error("创建订单消息结果未知 orderCreateDto: {}", JSON.toJSONString(orderCreateDto), ex);
                     result.daMaiFrameException = new DaMaiFrameException(BaseCode.ORDER_CREATE_RESULT_UNKNOWN.getCode(),
                             "订单结果待确认，请勿重复下单，订单号: " + orderCreateDto.getOrderNumber(), ex);
@@ -387,6 +403,7 @@ public class ProgramOrderService {
                 }
             });
         } catch (OrderMessageNotSentException ex) {
+            markMessageStatus(orderCreateDto.getOrderNumber(), "NOT_SENT");
             // Only this explicit preflight outcome proves this invocation never called Kafka send.
             try {
                 long released = releaseUnsentReservation.release(orderCreateDto.getProgramId(),
@@ -423,6 +440,27 @@ public class ProgramOrderService {
             throw result.daMaiFrameException;
         }
         return result.orderNumber;
+    }
+
+    private void markMessageStatus(Long orderNumber, String status) {
+        try {
+            reservationLedger.updateSendStatus(orderNumber, status);
+        } catch (RuntimeException ex) {
+            log.warn("更新订单消息状态失败 orderNumber: {}", orderNumber, ex);
+        }
+    }
+
+    /** Rebuild the same tracked message after a consumer was interrupted. */
+    public void retryProcessingReservation(JSONObject record) {
+        ProgramOrderCreateDto request = JSON.parseObject(record.getString("request"), ProgramOrderCreateDto.class);
+        List<SeatVo> seats = record.getJSONArray("seats").toJavaList(SeatVo.class);
+        Long orderNumber = Long.valueOf(record.getString("orderNumber"));
+        OrderCreateDto order = buildCreateOrderParam(request, seats, orderNumber);
+        order.setCreateOrderTime(new Date(record.getLongValue("createdAtMillis")));
+        order.setReservationTracked(true);
+        createOrderSend.sendMessage(JSON.toJSONString(order),
+                result -> markMessageStatus(orderNumber, "ACKNOWLEDGED"),
+                ex -> { markMessageStatus(orderNumber, "UNKNOWN"); log.warn("重试订单消息失败 orderNumber: {}", orderNumber, ex); });
     }
 
     private void updateProgramCacheDataResolution(Long programId,List<SeatVo> seatVoList,OrderStatus orderStatus){

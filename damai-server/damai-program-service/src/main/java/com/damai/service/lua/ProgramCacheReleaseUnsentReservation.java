@@ -33,6 +33,14 @@ public class ProgramCacheReleaseUnsentReservation {
     }
 
     public long release(Long programId, Long orderNumber, List<SeatVo> seats) {
+        return release(programId, orderNumber, seats, "PRE_SEND_FAILURE");
+    }
+
+    public long releaseExpired(Long programId, Long orderNumber, List<SeatVo> seats) {
+        return release(programId, orderNumber, seats, "EXPIRED");
+    }
+
+    private long release(Long programId, Long orderNumber, List<SeatVo> seats, String reason) {
         Map<Long, Map<String, Object>> categories = new LinkedHashMap<>();
         for (SeatVo seat : seats) {
             Long categoryId = seat.getTicketCategoryId();
@@ -52,8 +60,10 @@ public class ProgramCacheReleaseUnsentReservation {
             List<String> seatIds = (List<String>) category.get("seatIds");
             seatIds.add(String.valueOf(seat.getId()));
         }
-        Long released = (Long) redisCache.getInstance().execute(script, List.of("#"),
-                String.valueOf(orderNumber), JSON.toJSONString(categories.values()));
+        Long released = (Long) redisCache.getInstance().execute(script, List.of(
+                RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_RESERVATION_LEDGER),
+                RedisKeyBuild.getRedisKey(RedisKeyManage.PROGRAM_ORDER_RESERVATION_DUE)),
+                String.valueOf(orderNumber), JSON.toJSONString(categories.values()), reason);
         if (released == null) {
             throw new IllegalStateException("Redis returned no result for reservation release");
         }

@@ -591,9 +591,19 @@ public class OrderService extends ServiceImpl<OrderMapper, Order> {
     }
     
     
-    @RepeatExecuteLimit(name = CREATE_PROGRAM_ORDER_MQ,keys = {"#orderCreateDto.orderNumber"})
+    @ServiceLock(name = CREATE_PROGRAM_ORDER_MQ,keys = {"#orderCreateDto.orderNumber"})
     @Transactional(rollbackFor = Exception.class)
     public String createMq(OrderCreateDto orderCreateDto){
+        if (Boolean.TRUE.equals(orderCreateDto.getReservationTracked())) {
+            Order existing = orderMapper.selectOne(Wrappers.lambdaQuery(Order.class)
+                    .eq(Order::getOrderNumber, orderCreateDto.getOrderNumber()));
+            if (existing != null) {
+                String orderNumber = String.valueOf(existing.getOrderNumber());
+                redisCache.set(RedisKeyBuild.createRedisKey(RedisKeyManage.ORDER_MQ, orderNumber),
+                        orderNumber, 1, TimeUnit.MINUTES);
+                return orderNumber;
+            }
+        }
         String orderNumber = create(orderCreateDto);
         redisCache.set(RedisKeyBuild.createRedisKey(RedisKeyManage.ORDER_MQ,orderNumber),orderNumber,1, TimeUnit.MINUTES);
         return orderNumber;

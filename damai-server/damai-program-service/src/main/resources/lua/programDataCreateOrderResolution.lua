@@ -5,6 +5,19 @@ local program_id = KEYS[4]
 local ticket_count_list = cjson.decode(ARGV[1])
 -- V4 supplies the order number before reserving; V3 supplies no third argument.
 local reservation_order_number = ARGV[3]
+if reservation_order_number then
+    if not KEYS[5] or not KEYS[6] or not ARGV[4] or not tonumber(ARGV[5]) then
+        return redis.error_reply('Missing reservation ledger arguments')
+    end
+    local ledger_type = redis.call('TYPE', KEYS[5]).ok
+    local due_type = redis.call('TYPE', KEYS[6]).ok
+    if (ledger_type ~= 'none' and ledger_type ~= 'hash') or (due_type ~= 'none' and due_type ~= 'zset') then
+        return redis.error_reply('Invalid reservation ledger key type')
+    end
+    if redis.call('HEXISTS', KEYS[5], reservation_order_number) == 1 then
+        return redis.error_reply('Reservation order already exists')
+    end
+end
 local purchase_seat_list = {}
 local total_seat_dto_price = 0
 local total_seat_vo_price = 0
@@ -140,5 +153,15 @@ for ticket_category_id, seat_id_array in pairs(seat_id_list) do
 end
 for ticket_category_id, seat_data_array in pairs(seat_data_list) do
     redis.call('hmset',string.format(placeholder_seat_lock_hash_key,program_id,tostring(ticket_category_id)),unpack(seat_data_array))    
+end
+if reservation_order_number then
+    local now = redis.call('TIME')
+    local created_ms = now[1] * 1000 + math.floor(now[2] / 1000)
+    local deadline_ms = created_ms + tonumber(ARGV[5])
+    local record = {orderNumber = reservation_order_number, state = 'PENDING',
+        sendStatus = 'NOT_STARTED', consumeStatus = 'NOT_STARTED', request = ARGV[4],
+        seats = purchase_seat_list, createdAtMillis = created_ms, deadlineMillis = deadline_ms}
+    redis.call('HSET', KEYS[5], reservation_order_number, cjson.encode(record))
+    redis.call('ZADD', KEYS[6], deadline_ms, reservation_order_number)
 end
 return string.format('{"%s": %d, "%s": %s}', 'code', 0, 'purchaseSeatList', cjson.encode(purchase_seat_list))

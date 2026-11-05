@@ -16,4 +16,7 @@ public class KafkaTopic {
     @Value("${spring.kafka.topic:default}")
     private String topic;
 
+    @Value("${spring.kafka.reservation-topic:create_order_reservation}")
+    private String reservationTopic = "create_order_reservation";
+
 }
